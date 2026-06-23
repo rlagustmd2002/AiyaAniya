@@ -1,0 +1,736 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>딥보이스 탐지 시스템</title>
+<style>
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  :root {
+    --bg-primary:   #0a0e1a;
+    --bg-secondary: #131a2c;
+    --bg-card:      #1a2236;
+    --border:       #2a3450;
+    --text-primary: #e6ecf5;
+    --text-muted:   #8895b2;
+    --accent:       #5b8cff;
+    --real:         #22d3a4;
+    --real-glow:    rgba(34, 211, 164, 0.4);
+    --fake:         #ff5577;
+    --fake-glow:    rgba(255, 85, 119, 0.4);
+    --warning:      #f5b942;
+  }
+
+  html, body {
+    height: 100%;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Pretendard",
+                 "Noto Sans KR", Roboto, sans-serif;
+    overscroll-behavior: none;
+  }
+
+  body {
+    background: radial-gradient(ellipse at top, #1a2444 0%, var(--bg-primary) 60%);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 24px 16px;
+  }
+
+  .container {
+    width: 100%;
+    max-width: 480px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  header {
+    text-align: center;
+    padding: 8px 0 4px;
+  }
+  header h1 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.5px;
+    background: linear-gradient(135deg, var(--accent), #a78bfa);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  header p {
+    margin-top: 6px;
+    font-size: 13px;
+    color: var(--text-muted);
+  }
+  .status-pill {
+    display: inline-block;
+    margin-top: 10px;
+    padding: 4px 10px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .status-pill.online::before {
+    content: "";
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--real);
+    margin-right: 6px;
+    vertical-align: middle;
+    box-shadow: 0 0 8px var(--real-glow);
+  }
+  .status-pill.offline::before {
+    content: "";
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--fake);
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+
+  .result-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 28px 20px;
+    text-align: center;
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+  }
+  .result-card.real {
+    border-color: var(--real);
+    box-shadow: 0 0 40px var(--real-glow), inset 0 0 30px rgba(34, 211, 164, 0.05);
+  }
+  .result-card.fake {
+    border-color: var(--fake);
+    box-shadow: 0 0 40px var(--fake-glow), inset 0 0 30px rgba(255, 85, 119, 0.05);
+    animation: shake 0.4s ease-in-out;
+  }
+  .result-card.no-voice {
+    border-color: var(--warning);
+    box-shadow: 0 0 40px rgba(245, 185, 66, 0.3), inset 0 0 30px rgba(245, 185, 66, 0.05);
+  }
+  .result-card.no-voice .result-text { color: var(--warning); font-size: 32px; }
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    25% { transform: translateX(-4px); }
+    75% { transform: translateX(4px); }
+  }
+
+  .result-label {
+    font-size: 13px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    margin-bottom: 10px;
+  }
+  .result-text {
+    font-size: 48px;
+    font-weight: 800;
+    letter-spacing: -1px;
+    line-height: 1;
+    margin-bottom: 12px;
+  }
+  .result-card.real .result-text { color: var(--real); text-shadow: 0 0 20px var(--real-glow); }
+  .result-card.fake .result-text { color: var(--fake); text-shadow: 0 0 20px var(--fake-glow); }
+  .result-card.idle .result-text { color: var(--text-muted); font-size: 36px; }
+
+  .confidence {
+    font-size: 14px;
+    color: var(--text-muted);
+    margin-bottom: 20px;
+  }
+  .confidence b {
+    color: var(--text-primary);
+    font-weight: 700;
+  }
+
+  .prob-bars {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    text-align: left;
+  }
+  .prob-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+  }
+  .prob-label {
+    width: 50px;
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+  .prob-bar-bg {
+    flex: 1;
+    height: 10px;
+    background: rgba(255, 255, 255, 0.05);
+    border-radius: 5px;
+    overflow: hidden;
+  }
+  .prob-bar-fill {
+    height: 100%;
+    border-radius: 5px;
+    transition: width 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .prob-bar-fill.real { background: linear-gradient(90deg, var(--real), #34e8c0); }
+  .prob-bar-fill.fake { background: linear-gradient(90deg, var(--fake), #ff89a4); }
+  .prob-value {
+    width: 50px;
+    text-align: right;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-primary);
+  }
+
+  .control-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 24px 20px;
+    text-align: center;
+  }
+  .mic-button {
+    width: 110px;
+    height: 110px;
+    border-radius: 50%;
+    border: none;
+    background: linear-gradient(135deg, var(--accent), #a78bfa);
+    color: white;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    transition: transform 0.2s, box-shadow 0.3s;
+    box-shadow: 0 8px 24px rgba(91, 140, 255, 0.3);
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto 16px;
+  }
+  .mic-button:active {
+    transform: scale(0.95);
+  }
+  .mic-button.recording {
+    background: linear-gradient(135deg, var(--fake), #ff89a4);
+    box-shadow: 0 0 0 0 var(--fake-glow);
+    animation: pulse 1.5s infinite;
+  }
+  @keyframes pulse {
+    0%   { box-shadow: 0 0 0 0 rgba(255, 85, 119, 0.6); }
+    70%  { box-shadow: 0 0 0 20px rgba(255, 85, 119, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(255, 85, 119, 0); }
+  }
+  .mic-button .icon { font-size: 36px; line-height: 1; }
+  .mic-button .label { font-size: 11px; margin-top: 4px; opacity: 0.9; }
+
+  .countdown {
+    font-size: 13px;
+    color: var(--text-muted);
+    height: 20px;
+  }
+
+  .history-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 16px 18px;
+    max-height: 300px;
+    overflow-y: auto;
+  }
+  .history-title {
+    font-size: 12px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1.5px;
+    margin-bottom: 10px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  .upload-area {
+    margin-top: 16px;
+    width: 100%;
+  }
+  .upload-divider {
+    display: flex;
+    align-items: center;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+    margin: 12px 0;
+  }
+  .upload-divider::before,
+  .upload-divider::after {
+    content: "";
+    flex: 1;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  }
+  .upload-divider span { padding: 0 12px; }
+  .upload-btn {
+    display: block;
+    width: 100%;
+    padding: 12px;
+    text-align: center;
+    background: rgba(91, 140, 255, 0.1);
+    border: 1px solid rgba(91, 140, 255, 0.4);
+    border-radius: 10px;
+    color: #5b8cff;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.2s;
+    box-sizing: border-box;
+  }
+  .upload-btn:hover { background: rgba(91, 140, 255, 0.2); }
+  .file-name {
+    margin-top: 8px;
+    font-size: 12px;
+    color: var(--text-muted);
+    text-align: center;
+    word-break: break-all;
+  }
+  .clear-btn {
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 11px;
+    cursor: pointer;
+    text-decoration: underline;
+  }
+  .history-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .history-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 10px;
+    background: rgba(255, 255, 255, 0.02);
+    border-radius: 8px;
+    font-size: 13px;
+  }
+  .history-item .h-time {
+    color: var(--text-muted);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+  }
+  .history-item .h-label {
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 11px;
+  }
+  .history-item .h-label.real { background: rgba(34, 211, 164, 0.15); color: var(--real); }
+  .history-item .h-label.fake { background: rgba(255, 85, 119, 0.15); color: var(--fake); }
+  .history-empty {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+    padding: 20px 0;
+  }
+
+  .model-info {
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.5;
+  }
+
+  .error {
+    background: rgba(255, 85, 119, 0.1);
+    border: 1px solid var(--fake);
+    color: var(--fake);
+    padding: 12px;
+    border-radius: 12px;
+    font-size: 13px;
+    text-align: center;
+  }
+
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body>
+<div class="container">
+  <header>
+    <h1>🎙️ 딥보이스 탐지 시스템</h1>
+    <p>실시간 합성 음성 판별</p>
+    <span id="serverStatus" class="status-pill offline">서버 연결 중...</span>
+  </header>
+
+  <div id="resultCard" class="result-card idle">
+    <div class="result-label">판별 결과</div>
+    <div id="resultText" class="result-text">대기 중</div>
+    <div id="confidence" class="confidence">아래 버튼을 눌러 시작하세요</div>
+
+    <div class="prob-bars">
+      <div class="prob-row">
+        <span class="prob-label">REAL</span>
+        <div class="prob-bar-bg">
+          <div id="realBar" class="prob-bar-fill real" style="width: 0%"></div>
+        </div>
+        <span id="realProb" class="prob-value">0.0%</span>
+      </div>
+      <div class="prob-row">
+        <span class="prob-label">FAKE</span>
+        <div class="prob-bar-bg">
+          <div id="fakeBar" class="prob-bar-fill fake" style="width: 0%"></div>
+        </div>
+        <span id="fakeProb" class="prob-value">0.0%</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="control-card">
+    <button id="micButton" class="mic-button">
+      <div>
+        <div class="icon">🎤</div>
+        <div class="label">시작</div>
+      </div>
+    </button>
+    <div id="countdown" class="countdown">5초씩 자동 반복 녹음</div>
+
+    <!-- 파일 업로드 (도메인 갭 테스트용) -->
+    <div class="upload-area">
+      <div class="upload-divider"><span>또는</span></div>
+      <label for="fileInput" class="upload-btn">
+        📁 음성 파일 직접 선택 (wav/mp3)
+      </label>
+      <input type="file" id="fileInput" accept="audio/*,.wav,.mp3,.m4a,.flac,.ogg" style="display:none" />
+      <div id="fileName" class="file-name"></div>
+    </div>
+  </div>
+
+  <div id="errorBox" class="error" style="display:none"></div>
+  <div class="history-card">
+    <div class="history-title">
+      <span>최근 판별 기록</span>
+      <button class="clear-btn" onclick="clearHistory()">전체 삭제</button>
+    </div>
+    <div id="historyList" class="history-list">
+      <div class="history-empty">아직 기록이 없습니다</div>
+    </div>
+  </div>
+
+  <!-- 모델 정보 -->
+  <div id="modelInfo" class="model-info" style="display:none">모델 정보 로딩 중...</div>
+
+</div>
+
+<script>
+  //  설정
+  const API_BASE      = window.location.origin;  // 같은 호스트
+  const RECORD_LENGTH = 5000;                    // 5초 녹음
+
+  //  상태
+  let mediaRecorder = null;
+  let audioChunks   = [];
+  let isRecording   = false;
+  let stream        = null;
+  let countdownTimer = null;
+
+  const $mic         = document.getElementById("micButton");
+  const $resultCard  = document.getElementById("resultCard");
+  const $resultText  = document.getElementById("resultText");
+  const $confidence  = document.getElementById("confidence");
+  const $realBar     = document.getElementById("realBar");
+  const $fakeBar     = document.getElementById("fakeBar");
+  const $realProb    = document.getElementById("realProb");
+  const $fakeProb    = document.getElementById("fakeProb");
+  const $countdown   = document.getElementById("countdown");
+  const $errorBox    = document.getElementById("errorBox");
+  const $historyList = document.getElementById("historyList");
+  const $serverStatus = document.getElementById("serverStatus");
+  const $modelInfo   = document.getElementById("modelInfo");
+
+  //  서버 상태 확인
+  async function checkServer() {
+    try {
+      const res = await fetch(`${API_BASE}/health`);
+      if (res.ok) {
+        $serverStatus.className = "status-pill online";
+        $serverStatus.textContent = "서버 연결됨";
+        return true;
+      }
+    } catch (e) {}
+    $serverStatus.className = "status-pill offline";
+    $serverStatus.textContent = "서버 연결 실패";
+    return false;
+  }
+
+  async function loadModelInfo() {
+    try {
+      const res = await fetch(`${API_BASE}/model/info`);
+      const info = await res.json();
+      const acc = info.val_acc ? (info.val_acc * 100).toFixed(1) + "%" : "?";
+      const auc = info.val_auc ? info.val_auc.toFixed(4) : "?";
+      $modelInfo.innerHTML = `
+        Model: wav2vec2-base | Device: ${info.device}<br>
+        Val Acc: ${acc} | Val AUC: ${auc}
+      `;
+    } catch (e) {
+      $modelInfo.textContent = "모델 정보 불러오기 실패";
+    }
+  }
+
+  //  녹음 시작/중지
+  $mic.addEventListener("click", async () => {
+    if (isRecording) {
+      stopRecording();
+    } else {
+      await startRecording();
+    }
+  });
+
+  async function startRecording() {
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          sampleRate:   16000,
+          echoCancellation: true,
+          noiseSuppression: true,
+        }
+      });
+    } catch (err) {
+      showError("마이크 권한이 필요합니다. 브라우저 설정을 확인하세요.");
+      return;
+    }
+
+    hideError();
+    isRecording = true;
+    $mic.classList.add("recording");
+    $mic.querySelector(".label").textContent = "중지";
+
+    recordOneChunk();
+  }
+
+  function recordOneChunk() {
+    if (!isRecording) return;
+
+    audioChunks = [];
+
+    // 가능한 mime type 자동 선택
+    let mimeType = "audio/webm;codecs=opus";
+    if (!MediaRecorder.isTypeSupported(mimeType)) {
+      mimeType = "audio/webm";
+      if (!MediaRecorder.isTypeSupported(mimeType)) {
+        mimeType = "audio/mp4";
+      }
+    }
+
+    try {
+      mediaRecorder = new MediaRecorder(stream, { mimeType });
+    } catch (e) {
+      mediaRecorder = new MediaRecorder(stream);
+    }
+
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0) audioChunks.push(e.data);
+    };
+
+    mediaRecorder.onstop = async () => {
+      const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType });
+      await sendToServer(blob);
+
+      // 자동 반복
+      if (isRecording) {
+        recordOneChunk();
+      }
+    };
+
+    mediaRecorder.start();
+    startCountdown();
+
+    setTimeout(() => {
+      if (mediaRecorder && mediaRecorder.state === "recording") {
+        mediaRecorder.stop();
+      }
+    }, RECORD_LENGTH);
+  }
+
+  function stopRecording() {
+    isRecording = false;
+    $mic.classList.remove("recording");
+    $mic.querySelector(".label").textContent = "시작";
+
+    if (mediaRecorder && mediaRecorder.state === "recording") {
+      mediaRecorder.stop();
+    }
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+      stream = null;
+    }
+
+    clearCountdown();
+    $countdown.textContent = "5초씩 자동 반복 녹음";
+  }
+
+  //  카운트다운
+  function startCountdown() {
+    let remaining = RECORD_LENGTH / 1000;
+    $countdown.textContent = `녹음 중... ${remaining}초 남음`;
+
+    clearCountdown();
+    countdownTimer = setInterval(() => {
+      remaining--;
+      if (remaining <= 0) {
+        $countdown.textContent = "분석 중...";
+        clearCountdown();
+      } else {
+        $countdown.textContent = `녹음 중... ${remaining}초 남음`;
+      }
+    }, 1000);
+  }
+
+  function clearCountdown() {
+    if (countdownTimer) {
+      clearInterval(countdownTimer);
+      countdownTimer = null;
+    }
+  }
+
+  //  서버로 전송
+  async function sendToServer(blob, filename) {
+    const formData = new FormData();
+    formData.append("file", blob, filename || "audio.webm");
+
+    try {
+      const res = await fetch(`${API_BASE}/predict`, {
+        method: "POST",
+        body:   formData,
+      });
+
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(err);
+      }
+
+      const result = await res.json();
+      showResult(result);
+      addHistory(result);
+
+    } catch (err) {
+      showError("판별 실패: " + err.message);
+    }
+  }
+
+  //  파일 업로드 판별
+  const $fileInput = document.getElementById("fileInput");
+  const $fileName  = document.getElementById("fileName");
+
+  $fileInput.addEventListener("change", async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    $fileName.textContent = `판별 중: ${file.name}`;
+    hideError();
+    await sendToServer(file, file.name);
+
+    $fileName.textContent = `완료: ${file.name}`;
+    e.target.value = "";
+  });
+
+  //  결과 표시
+  function showResult(result) {
+    if (result.prediction === "no_voice") {
+      $resultCard.className = "result-card no-voice";
+      $resultText.textContent = "음성 없음";
+      $confidence.innerHTML = `말소리가 감지되지 않았습니다`;
+      $realBar.style.width = "0%";
+      $fakeBar.style.width = "0%";
+      $realProb.textContent = "—";
+      $fakeProb.textContent = "—";
+      return;
+    }
+
+    const isFake = result.prediction === "fake";
+    const conf   = (result.confidence * 100).toFixed(1);
+    const realP  = (result.real_probability * 100).toFixed(1);
+    const fakeP  = (result.fake_probability * 100).toFixed(1);
+
+    $resultCard.className = "result-card " + (isFake ? "fake" : "real");
+    $resultText.textContent = isFake ? "FAKE" : "REAL";
+    $confidence.innerHTML = `신뢰도 <b>${conf}%</b> · 처리 시간 <b>${result.processing_time_ms}ms</b>`;
+
+    $realBar.style.width = realP + "%";
+    $fakeBar.style.width = fakeP + "%";
+    $realProb.textContent = realP + "%";
+    $fakeProb.textContent = fakeP + "%";
+  }
+
+  //  히스토리
+  let history = [];
+
+  function addHistory(result) {
+    if (result.prediction === "no_voice") return;
+
+    const now = new Date();
+    const time = now.toLocaleTimeString("ko-KR", { hour12: false });
+    history.unshift({
+      time,
+      prediction: result.prediction,
+      confidence: result.confidence,
+    });
+    if (history.length > 20) history.pop();
+    renderHistory();
+  }
+
+  function renderHistory() {
+    if (history.length === 0) {
+      $historyList.innerHTML = '<div class="history-empty">아직 기록이 없습니다</div>';
+      return;
+    }
+    $historyList.innerHTML = history.map(item => `
+      <div class="history-item">
+        <span class="h-time">${item.time}</span>
+        <span class="h-label ${item.prediction}">${item.prediction.toUpperCase()}</span>
+        <span style="color: var(--text-muted); font-size: 11px;">
+          ${(item.confidence * 100).toFixed(0)}%
+        </span>
+      </div>
+    `).join("");
+  }
+
+  function clearHistory() {
+    history = [];
+    renderHistory();
+  }
+
+  //  에러
+  function showError(msg) {
+    $errorBox.textContent = msg;
+    $errorBox.style.display = "block";
+    setTimeout(() => { $errorBox.style.display = "none"; }, 5000);
+  }
+  function hideError() {
+    $errorBox.style.display = "none";
+  }
+
+  //  초기화
+  (async () => {
+    await checkServer();
+    await loadModelInfo();
+  })();
+</script>
+</body>
+</html>
