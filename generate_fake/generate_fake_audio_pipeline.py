@@ -8,48 +8,27 @@ import requests
 import traceback
 from tqdm import tqdm
 
-# API 서버 주소
 API_BASE = "http://127.0.0.1:9880"
-
-# GPT-SoVITS 설치 폴더
 GPTSOVITS_DIR = r"E:\GPT-SoVITS-v3lora-20250228"
-
-# 데이터셋 루트
 BASE_DATASET_DIR = r"E:\Project\AiyaAniya\datasets"
-
-# 원천 음성 폴더 (ref_audio 탐색용)
 ORIGIN_VOICE_DIR = os.path.join(BASE_DATASET_DIR, "origin_voice")
-
-# 라벨링 폴더 (prompt_text 추출용)
 ORIGIN_LABEL_DIR = os.path.join(BASE_DATASET_DIR, "origin_voice_labeling")
-
-# .list 파일 폴더 (대본 추출용)
 LIST_DIR = os.path.join(BASE_DATASET_DIR, "dataset_list")
-
-# 가짜 음성 출력 폴더
 FAKE_VOICE_DIR = os.path.join(BASE_DATASET_DIR, "fake_voice")
-
-# SoVITS 가중치 폴더
 SOVITS_WEIGHT_DIR = os.path.join(GPTSOVITS_DIR, "SoVITS_weights_v2ProPlus")
 
-# GPT 가중치 폴더 (두 곳 모두 탐색)
 GPT_WEIGHT_DIR_PLUS = os.path.join(GPTSOVITS_DIR, "GPT_weights_v2ProPlus")
 GPT_WEIGHT_DIR_PRO  = os.path.join(GPTSOVITS_DIR, "GPT_weights_v2Pro")
 
-# 화자 1명당 생성할 최대 음성 수
 MAX_COUNT = 2000
 
-# ref_audio 최소 길이 (초)
 MIN_REF_DURATION = 3.0
 
-# 언어
 PROMPT_LANG = "ko"
 TEXT_LANG   = "ko"
 
-# API 요청 타임아웃 (초)
 REQUEST_TIMEOUT = 60
 
-#  내부 유틸 함수
 def log(msg, level="INFO"):
     tag = {"INFO": "[ INFO ]", "OK": "[  OK  ]", "WARN": "[ WARN ]", "ERROR": "[ERROR ]"}.get(level, "[ INFO ]")
     print(f"{tag} {msg}", flush=True)
@@ -78,7 +57,6 @@ def find_ref_audio(wav_dir):
 
 
 def get_prompt_text(wav_path, json_dir):
-    """ref_audio에 대응하는 JSON에서 TransLabelText 추출."""
     json_name = os.path.splitext(os.path.basename(wav_path))[0] + ".json"
     json_path = os.path.join(json_dir, json_name)
     if not os.path.exists(json_path):
@@ -93,18 +71,12 @@ def get_prompt_text(wav_path, json_dir):
 
 
 def find_best_model(weight_dir, speaker_folder, ext):
-    """
-    weight_dir에서 speaker_folder로 시작하는 모델 파일 중
-    epoch 숫자가 가장 큰 파일 반환.
-    없으면 None.
-    """
     pattern = os.path.join(weight_dir, f"{speaker_folder}*{ext}")
     files = glob.glob(pattern)
     if not files:
         return None
 
     def extract_epoch(path):
-        # e15, e8, e10 등에서 숫자 추출
         m = re.search(r'[_\-]e(\d+)', os.path.basename(path))
         return int(m.group(1)) if m else 0
 
@@ -113,7 +85,6 @@ def find_best_model(weight_dir, speaker_folder, ext):
 
 
 def find_gpt_model(speaker_folder):
-    """GPT_weights_v2ProPlus 우선, 없으면 GPT_weights_v2Pro에서 탐색."""
     model = find_best_model(GPT_WEIGHT_DIR_PLUS, speaker_folder, ".ckpt")
     if model:
         return model
@@ -121,15 +92,10 @@ def find_gpt_model(speaker_folder):
 
 
 def find_sovits_model(speaker_folder):
-    """SoVITS_weights_v2ProPlus에서 탐색."""
     return find_best_model(SOVITS_WEIGHT_DIR, speaker_folder, ".pth")
 
 
 def get_texts_from_list(list_path, max_count):
-    """
-    .list 파일에서 대본 텍스트 추출.
-    반환: [(audio_path, text), ...]
-    """
     results = []
     try:
         with open(list_path, "r", encoding="utf-8") as f:
@@ -150,7 +116,6 @@ def get_texts_from_list(list_path, max_count):
 
 
 def set_model(gpt_path, sovits_path):
-    """API 서버에 모델 교체 요청."""
     res_gpt    = requests.get(f"{API_BASE}/set_gpt_weights",
                               params={"weights_path": gpt_path}, timeout=30)
     res_sovits = requests.get(f"{API_BASE}/set_sovits_weights",
@@ -163,18 +128,16 @@ def set_model(gpt_path, sovits_path):
 
 
 def already_generated(speaker_folder):
-    """이미 가짜 음성이 생성된 화자면 True (출력 폴더에 wav 파일 존재)."""
     out_dir = os.path.join(FAKE_VOICE_DIR, speaker_folder)
     if not os.path.isdir(out_dir):
         return False
     wav_files = glob.glob(os.path.join(out_dir, "*.wav"))
     return len(wav_files) > 0
 
-#  메인 파이프라인
+
 def main():
     os.makedirs(FAKE_VOICE_DIR, exist_ok=True)
 
-    # 원천 음성 폴더 기준으로 화자 목록 구성
     speaker_folders = sorted([
         d for d in os.listdir(ORIGIN_VOICE_DIR)
         if os.path.isdir(os.path.join(ORIGIN_VOICE_DIR, d))
@@ -201,13 +164,11 @@ def main():
         print()
         log(f"[{idx}/{len(speaker_folders)}] ▶ 화자: {speaker_folder}")
 
-        # 이미 생성 완료된 화자 스킵
         if already_generated(speaker_folder):
             log(f"  이미 생성된 음성 존재 → 스킵", "WARN")
             skip_list.append(speaker_folder)
             continue
 
-        # 모델 파일 탐색
         gpt_model    = find_gpt_model(speaker_folder)
         sovits_model = find_sovits_model(speaker_folder)
 
@@ -223,7 +184,6 @@ def main():
         log(f"  GPT    : {os.path.basename(gpt_model)}")
         log(f"  SoVITS : {os.path.basename(sovits_model)}")
 
-        # ref_audio / prompt_text 탐색
         wav_dir  = os.path.join(ORIGIN_VOICE_DIR, speaker_folder)
         json_dir = os.path.join(ORIGIN_LABEL_DIR, speaker_folder)
 
@@ -243,7 +203,6 @@ def main():
         log(f"  ref_audio   : {os.path.basename(ref_audio)} ({dur:.1f}초)")
         log(f"  prompt_text : {prompt_text[:40]}{'...' if len(prompt_text) > 40 else ''}")
 
-        # .list에서 대본 추출
         list_path = os.path.join(LIST_DIR, f"{speaker_folder}.list")
         if not os.path.exists(list_path):
             log(f"  .list 파일 없음: {list_path}", "ERROR")
@@ -266,7 +225,7 @@ def main():
             fail_list.append((speaker_folder, f"모델 교체 실패: {e}"))
             continue
 
-        time.sleep(1)  # 모델 로딩 대기
+        time.sleep(1)
 
         out_dir = os.path.join(FAKE_VOICE_DIR, speaker_folder)
         os.makedirs(out_dir, exist_ok=True)
