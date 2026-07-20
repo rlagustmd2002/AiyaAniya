@@ -23,18 +23,15 @@ from torch.cuda.amp import autocast, GradScaler
 from transformers import Wav2Vec2Model
 from tqdm import tqdm
 
-# 데이터 경로
 BASE_DATASET_DIR = r"E:\Project\AiyaAniya\datasets"
 ORIGIN_VOICE_DIR = os.path.join(BASE_DATASET_DIR, "origin_voice")
 FAKE_VOICE_DIR   = os.path.join(BASE_DATASET_DIR, "fake_voice")
 LIST_DIR         = os.path.join(BASE_DATASET_DIR, "dataset_list")
 
-# 출력 경로
 _BASE_DIR      = os.path.dirname(os.path.abspath(__file__))
 CHECKPOINT_DIR = os.path.join(_BASE_DIR, "checkpoints")
 RESULTS_DIR    = os.path.join(_BASE_DIR, "results")
 
-# 학습 파라미터
 BATCH_SIZE    = 8
 EPOCHS        = 50
 LEARNING_RATE = 1e-5
@@ -45,19 +42,15 @@ TRAIN_RATIO = 0.70
 VAL_RATIO   = 0.15  
 # TEST_RATIO  = 0.15
 
-# 화자당 최대 사용 쌍 수 (real/fake 각각 이만큼)
 MAX_SAMPLES_PER_SPEAKER = 2000
 
-# 도메인 통일 / 증강 설정
 MATCH_BANDWIDTH   = False
 COMMON_LOWPASS_HZ = 7000
 AUG_BANDWIDTH     = True
 AUG_SILENCE_NOISE = True
 
-# Early Stopping
 EARLY_STOPPING_PATIENCE = 7
 
-# unfreeze할 wav2vec2 상위 트랜스포머 레이어 수
 UNFREEZE_LAST_N_LAYERS = 4
 
 NUM_WORKERS = 4
@@ -85,7 +78,6 @@ def _lowpass(waveform, sr, cutoff):
     cutoff = max(500.0, min(float(cutoff), sr / 2.0 - 100.0))
     return torchaudio.functional.lowpass_biquad(waveform, sr, cutoff)
 
-# 데이터 수집 (화자 단위)
 def collect_speaker_data():
     speaker_data = {}
 
@@ -111,7 +103,6 @@ def collect_speaker_data():
             log(f"  [SKIP] {speaker}: origin_voice 폴더 없음", "WARN")
             continue
 
-        # fake_voice 폴더가 비어있으면 스킵
         fake_count = len(glob.glob(os.path.join(fake_dir, "*.wav")))
         if fake_count == 0:
             log(f"  [SKIP] {speaker}: 가짜 음성 없음", "WARN")
@@ -174,7 +165,6 @@ def split_speakers(speaker_data, seed=SEED):
     return (flatten(train_speakers), flatten(val_speakers), flatten(test_speakers),
             train_speakers, val_speakers, test_speakers)
 
-#  Dataset
 class DeepfakeDataset(Dataset):
     def __init__(self, items, max_len=MAX_LEN, augment=False):
         """
@@ -205,7 +195,6 @@ class DeepfakeDataset(Dataset):
             waveform = torch.mean(waveform, dim=0, keepdim=True)
         waveform = waveform.squeeze(0)
 
-        # 도메인 통일: real(48k)/fake(32k) 파이프라인 차이 제거
         if MATCH_BANDWIDTH:
             waveform = _lowpass(waveform, SAMPLE_RATE, COMMON_LOWPASS_HZ)
 
@@ -220,13 +209,11 @@ class DeepfakeDataset(Dataset):
             pad = torch.zeros(self.max_len - waveform.size(0))
             waveform = torch.cat((waveform, pad), dim=0)
 
-        # 정규화
         mean = waveform.mean()
         std  = waveform.std() + 1e-7
         waveform = (waveform - mean) / std
 
         if self.augment:
-            # 대역폭 랜덤화
             if AUG_BANDWIDTH and random.random() < 0.5:
                 waveform = _lowpass(waveform, SAMPLE_RATE, random.uniform(3500, 7500))
 
@@ -241,7 +228,6 @@ class DeepfakeDataset(Dataset):
 
         return waveform, torch.tensor(label, dtype=torch.float32)
 
-#  모델
 class DeepfakeDetector(nn.Module):
     def __init__(self, unfreeze_last_n=UNFREEZE_LAST_N_LAYERS):
         super().__init__()
@@ -249,26 +235,21 @@ class DeepfakeDetector(nn.Module):
         log("  wav2vec2-base 로딩 중...")
         self.wav2vec2 = Wav2Vec2Model.from_pretrained("facebook/wav2vec2-base", use_safetensors=True)
 
-        # 전체 freeze
         for param in self.wav2vec2.parameters():
             param.requires_grad = False
 
-        # 상위 N개 트랜스포머 레이어 unfreeze
         total_layers = len(self.wav2vec2.encoder.layers)
         for layer in self.wav2vec2.encoder.layers[total_layers - unfreeze_last_n:]:
             for param in layer.parameters():
                 param.requires_grad = True
 
-        # feature projection도 unfreeze
         for param in self.wav2vec2.feature_projection.parameters():
             param.requires_grad = True
 
-        # 학습 대상 파라미터 수 출력
         trainable = sum(p.numel() for p in self.parameters() if p.requires_grad)
         total     = sum(p.numel() for p in self.parameters())
         log(f"  학습 파라미터: {trainable:,} / 전체: {total:,} ({trainable/total*100:.1f}%)")
 
-        # Classifier
         self.classifier = nn.Sequential(
             nn.Linear(768, 256),
             nn.LayerNorm(256),
@@ -284,14 +265,12 @@ class DeepfakeDetector(nn.Module):
         outputs = self.wav2vec2(x)
         hidden  = outputs.last_hidden_state  # (B, T, 768)
 
-        # mean + max pooling 결합
         mean_pool = hidden.mean(dim=1)
         max_pool  = hidden.max(dim=1).values
         pooled    = (mean_pool + max_pool) / 2
 
         return self.classifier(pooled).squeeze(-1)
 
-#  그래프 저장 함수
 def save_training_curve(history, epoch, save_dir):
     os.makedirs(save_dir, exist_ok=True)
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
@@ -299,7 +278,6 @@ def save_training_curve(history, epoch, save_dir):
 
     epochs_range = range(1, len(history["train_loss"]) + 1)
 
-    # Loss
     axes[0].plot(epochs_range, history["train_loss"], "b-o", label="Train Loss", markersize=4)
     axes[0].plot(epochs_range, history["val_loss"],   "r-o", label="Val Loss",   markersize=4)
     axes[0].set_title("Loss")
@@ -308,7 +286,6 @@ def save_training_curve(history, epoch, save_dir):
     axes[0].legend()
     axes[0].grid(True, alpha=0.3)
 
-    # Accuracy
     axes[1].plot(epochs_range, history["train_acc"], "b-o", label="Train Acc", markersize=4)
     axes[1].plot(epochs_range, history["val_acc"],   "r-o", label="Val Acc",   markersize=4)
     axes[1].set_title("Accuracy")
@@ -318,7 +295,6 @@ def save_training_curve(history, epoch, save_dir):
     axes[1].legend()
     axes[1].grid(True, alpha=0.3)
 
-    # AUC
     axes[2].plot(epochs_range, history["val_auc"], "g-o", label="Val AUC", markersize=4)
     axes[2].set_title("Validation AUC-ROC")
     axes[2].set_xlabel("Epoch")
@@ -332,7 +308,6 @@ def save_training_curve(history, epoch, save_dir):
     latest_path = os.path.join(save_dir, "training_curves_latest.png")
     plt.savefig(latest_path, dpi=150, bbox_inches="tight")
 
-    # 5에폭마다 백업
     if epoch % 5 == 0 or epoch == 1:
         backup_path = os.path.join(save_dir, f"training_curves_e{epoch:03d}.png")
         plt.savefig(backup_path, dpi=150, bbox_inches="tight")
@@ -347,7 +322,6 @@ def save_final_evaluation(y_true, y_prob, save_dir):
     fig, axes = plt.subplots(1, 2, figsize=(14, 6))
     fig.suptitle("Final Test Evaluation", fontsize=14)
 
-    # ROC Curve
     fpr, tpr, _ = roc_curve(y_true, y_prob)
     auc = roc_auc_score(y_true, y_prob)
     axes[0].plot(fpr, tpr, "b-", lw=2, label=f"AUC = {auc:.4f}")
@@ -358,7 +332,6 @@ def save_final_evaluation(y_true, y_prob, save_dir):
     axes[0].legend()
     axes[0].grid(True, alpha=0.3)
 
-    # Confusion Matrix
     cm = confusion_matrix(y_true, y_pred)
     im = axes[1].imshow(cm, interpolation="nearest", cmap=plt.cm.Blues)
     axes[1].set_title("Confusion Matrix")
@@ -381,7 +354,6 @@ def save_final_evaluation(y_true, y_prob, save_dir):
     plt.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close()
 
-    # 지표 계산
     acc = accuracy_score(y_true, y_pred)
     f1  = f1_score(y_true, y_pred)
     precision = precision_score(y_true, y_pred)
@@ -396,11 +368,10 @@ def save_final_evaluation(y_true, y_prob, save_dir):
         "confusion_matrix": cm.tolist(),
     }
 
-    # JSON으로 저장
     with open(os.path.join(save_dir, "final_metrics.json"), "w", encoding="utf-8") as f:
         json.dump(metrics, f, indent=2, ensure_ascii=False)
 
-    print(f"\n  ★ 최종 테스트 결과")
+    print(f"\n최종 테스트 결과")
     print(f"  Accuracy : {acc:.4f}")
     print(f"  Precision: {precision:.4f}")
     print(f"  Recall   : {recall:.4f}")
@@ -410,9 +381,7 @@ def save_final_evaluation(y_true, y_prob, save_dir):
 
     return metrics
 
-#  학습 / 평가 루프
 def run_epoch(model, loader, criterion, optimizer=None, scaler=None, desc=""):
-    """한 에폭 실행. optimizer=None이면 평가."""
     is_train = optimizer is not None
     model.train() if is_train else model.eval()
 
@@ -469,7 +438,6 @@ def run_epoch(model, loader, criterion, optimizer=None, scaler=None, desc=""):
 
     return avg_loss, acc, auc, all_probs, all_labels
 
-#  메인
 def train():
     set_seed(SEED)
     os.makedirs(CHECKPOINT_DIR, exist_ok=True)
@@ -482,13 +450,11 @@ def train():
         log(f"VRAM: {vram_gb:.1f} GB")
         log(f"Mixed Precision (AMP): {'사용' if USE_AMP else '미사용'}")
 
-    # 데이터 수집 / 분할
     speaker_data = collect_speaker_data()
 
     (train_items, val_items, test_items,
      train_speakers, val_speakers, test_speakers) = split_speakers(speaker_data)
 
-    # 분할 정보 저장
     with open(os.path.join(RESULTS_DIR, "dataset_split.json"), "w", encoding="utf-8") as f:
         json.dump({
             "train_speakers": train_speakers,
@@ -499,7 +465,6 @@ def train():
             "test_size":      len(test_items),
         }, f, indent=2, ensure_ascii=False)
 
-    # 클래스 균형 출력
     def count_labels(items):
         real = sum(1 for _, l in items if l == 0)
         fake = sum(1 for _, l in items if l == 1)
@@ -555,14 +520,12 @@ def train():
     criterion = nn.BCEWithLogitsLoss()
     scaler    = GradScaler() if (USE_AMP and DEVICE.type == "cuda") else None
 
-    # CSV 로그
     log_path = os.path.join(RESULTS_DIR, "training_log.csv")
     with open(log_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["epoch", "train_loss", "train_acc", "train_auc",
                          "val_loss", "val_acc", "val_auc", "lr"])
 
-    # 학습
     history = {
         "train_loss": [], "train_acc": [], "train_auc": [],
         "val_loss":   [], "val_acc":   [], "val_auc":   [],
@@ -601,16 +564,13 @@ def train():
         print(f"  Val   | Loss: {vl_loss:.4f}  Acc: {vl_acc:.4f}  AUC: {vl_auc:.4f}")
         print(f"  LR: {current_lr:.2e}")
 
-        # CSV 로그
         with open(log_path, "a", newline="", encoding="utf-8") as f:
             writer = csv.writer(f)
             writer.writerow([epoch, tr_loss, tr_acc, tr_auc,
                              vl_loss, vl_acc, vl_auc, current_lr])
 
-        # 그래프 저장
         save_training_curve(history, epoch, RESULTS_DIR)
 
-        # 최고 모델 저장 (추론용 메타정보 포함)
         if vl_loss < best_val_loss:
             best_val_loss    = vl_loss
             patience_counter = 0
@@ -622,7 +582,6 @@ def train():
                 "val_loss":            vl_loss,
                 "val_acc":             vl_acc,
                 "val_auc":             vl_auc,
-                # 추론 시 필요한 메타정보
                 "config": {
                     "sample_rate":      SAMPLE_RATE,
                     "max_len":          MAX_LEN,
@@ -631,12 +590,11 @@ def train():
                     "label_mapping":    {"0": "real", "1": "fake"},
                 },
             }, os.path.join(CHECKPOINT_DIR, "best_model.pth"))
-            print(f"  ★ 최고 모델 저장 (val_loss: {vl_loss:.4f})")
+            print(f"최고 모델 저장 (val_loss: {vl_loss:.4f})")
         else:
             patience_counter += 1
             print(f"  Early Stopping 카운터: {patience_counter}/{EARLY_STOPPING_PATIENCE}")
 
-        # 5 에폭마다 체크포인트
         if epoch % 5 == 0:
             torch.save({
                 "epoch":               epoch,
@@ -645,13 +603,11 @@ def train():
                 "val_loss":            vl_loss,
             }, os.path.join(CHECKPOINT_DIR, f"checkpoint_e{epoch:03d}.pth"))
 
-        # Early Stopping
         if patience_counter >= EARLY_STOPPING_PATIENCE:
-            print(f"\n  Early Stopping! ({EARLY_STOPPING_PATIENCE} 에폭 동안 개선 없음)")
+            print(f"\n  Early Stopping ({EARLY_STOPPING_PATIENCE} 에폭 동안 개선 없음)")
             print(f"  최고 성능: Epoch {best_epoch}, val_loss={best_val_loss:.4f}")
             break
 
-    # 최종 테스트
     print(f"\n[최종 테스트 평가] best_model.pth (epoch {best_epoch}) 로드...")
     best_ckpt = torch.load(
         os.path.join(CHECKPOINT_DIR, "best_model.pth"),
@@ -665,7 +621,7 @@ def train():
     )
 
     save_final_evaluation(test_labels, test_probs, RESULTS_DIR)
-    print(f"\n학습 완료! 결과 저장 위치: {RESULTS_DIR}")
+    print(f"\n학습 완료. 결과 저장 위치: {RESULTS_DIR}")
     print(f"최종 모델 경로: {CHECKPOINT_DIR}/best_model.pth")
 
 
