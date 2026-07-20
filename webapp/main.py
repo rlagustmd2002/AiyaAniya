@@ -18,36 +18,19 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from transformers import Wav2Vec2Model
 
-# 학습된 모델 경로
 MODEL_PATH = r"E:\Project\AiyaAniya\checkpoints\best_model.pth"
-
-# 프론트엔드 정적 파일 폴더
 STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
-
-# 서버 포트
 PORT = 8000
 
-# ffmpeg 경로 (GPT-SoVITS 폴더 내장 ffmpeg 사용)
 FFMPEG_PATH = r"E:\GPT-SoVITS-v3lora-20250228\ffmpeg.exe"
 if not os.path.exists(FFMPEG_PATH):
     FFMPEG_PATH = shutil.which("ffmpeg") or "ffmpeg"
 
-# ★ 판별 임계값 (이 값 이상이면 fake로 판별)
 FAKE_THRESHOLD = 0.5
-
-# ★ 최소 음성 에너지 (이 값 미만이면 "음성 없음"으로 판단)
-# 일반 발화는 보통 0.02~0.1 정도, 무음은 0.005 미만
 MIN_AUDIO_RMS = 0.01
-
-# ★ [추가] 학습과 동일한 도메인 통일 저역통과 (train.py의 COMMON_LOWPASS_HZ와 반드시 동일)
-#   재학습 모델이 저역통과된 입력으로 학습되므로, 추론도 같은 처리를 해야 정합한다.
 COMMON_LOWPASS_HZ = 7000
 
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# ============================================================
-#  모델 정의 (학습 시와 동일해야 함)
-# ============================================================
 
 class DeepfakeDetector(nn.Module):
     def __init__(self, unfreeze_last_n=4):
@@ -87,7 +70,6 @@ class DeepfakeDetector(nn.Module):
         pooled    = (mean_pool + max_pool) / 2
         return self.classifier(pooled).squeeze(-1)
 
-#  모델 로드 (서버 시작 시 1번만)
 print("=" * 60)
 print("딥보이스 탐지 서버 초기화 중...")
 print("=" * 60)
@@ -102,7 +84,6 @@ if not os.path.exists(MODEL_PATH):
 print(f"  모델 로드 중: {MODEL_PATH}")
 checkpoint = torch.load(MODEL_PATH, map_location=DEVICE, weights_only=False)
 
-# 메타정보 추출
 CONFIG = checkpoint.get("config", {
     "sample_rate":    16000,
     "max_len":        16000 * 4,
@@ -118,7 +99,6 @@ model = DeepfakeDetector(unfreeze_last_n=CONFIG["unfreeze_last_n"]).to(DEVICE)
 model.load_state_dict(checkpoint["model_state_dict"])
 model.eval()
 
-# 모델 성능 정보
 MODEL_INFO = {
     "trained_epoch":  checkpoint.get("epoch", "?"),
     "val_loss":       checkpoint.get("val_loss", None),
@@ -139,7 +119,6 @@ print("=" * 60)
 
 #  음성 전처리
 def preprocess_audio(audio_bytes: bytes) -> tuple:
-    # 임시 저장
     with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as tmp_in:
         tmp_in.write(audio_bytes)
         input_path = tmp_in.name
@@ -169,43 +148,36 @@ def preprocess_audio(audio_bytes: bytes) -> tuple:
     if sr != SAMPLE_RATE:
         waveform = T.Resample(sr, SAMPLE_RATE)(waveform)
 
-    # 모노 변환
     if waveform.shape[0] > 1:
         waveform = torch.mean(waveform, dim=0, keepdim=True)
     waveform = waveform.squeeze(0)
 
-    # RMS 에너지 계산 (음성 유무 판단용)
     rms = torch.sqrt(torch.mean(waveform ** 2)).item()
     # waveform = torchaudio.functional.lowpass_biquad(waveform, SAMPLE_RATE, COMMON_LOWPASS_HZ)
 
-    # 길이 맞추기 (가운데 잘라내기)
     if waveform.size(0) > MAX_LEN:
         start = (waveform.size(0) - MAX_LEN) // 2
         waveform = waveform[start:start + MAX_LEN]
     else:
-        # 음성을 반복(타일링)해 4초를 채워 무음 주입을 방지.
         if waveform.size(0) > 0:
             reps = (MAX_LEN // waveform.size(0)) + 1
             waveform = waveform.repeat(reps)[:MAX_LEN]
         else:
             waveform = torch.zeros(MAX_LEN)
 
-    # 정규화
     mean = waveform.mean()
     std  = waveform.std() + 1e-7
     waveform = (waveform - mean) / std
 
-    # 배치 차원 추가
-    return waveform.unsqueeze(0), rms  # (1, MAX_LEN), float
+    return waveform.unsqueeze(0), rms
 
 
 @torch.no_grad()
 def predict_audio(waveform: torch.Tensor) -> dict:
     waveform = waveform.to(DEVICE)
     logit  = model(waveform)
-    prob   = torch.sigmoid(logit).item()  # fake일 확률
+    prob   = torch.sigmoid(logit).item() 
 
-    # 임계값 기반 판별 (0.7 이상일 때만 fake)
     label = "fake" if prob >= FAKE_THRESHOLD else "real"
     confidence = prob if label == "fake" else (1 - prob)
 
@@ -216,14 +188,12 @@ def predict_audio(waveform: torch.Tensor) -> dict:
         "fake_probability": float(prob),
     }
 
-#  FastAPI 앱
 app = FastAPI(
     title="딥보이스 탐지 API",
     description="wav2vec2 기반 합성 음성 판별 서버",
     version="1.0.0",
 )
 
-# CORS 허용 (웹앱에서 호출하기 위해)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -253,20 +223,17 @@ async def model_info():
 async def predict(file: UploadFile = File(...)):
     start_time = time.time()
 
-    # 파일 크기 검증
     audio_bytes = await file.read()
     if len(audio_bytes) == 0:
         raise HTTPException(status_code=400, detail="빈 파일")
     if len(audio_bytes) > 50 * 1024 * 1024:  # 50MB 제한
         raise HTTPException(status_code=400, detail="파일 너무 큼 (50MB 초과)")
 
-    # 전처리
     try:
         waveform, rms = preprocess_audio(audio_bytes)
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"오디오 처리 실패: {e}")
 
-    # 음성 레벨 체크
     if rms < MIN_AUDIO_RMS:
         elapsed_ms = int((time.time() - start_time) * 1000)
         return {
@@ -280,7 +247,6 @@ async def predict(file: UploadFile = File(...)):
             "message":            "음성이 감지되지 않았습니다",
         }
 
-    # 추론
     try:
         result = predict_audio(waveform)
     except Exception as e:
@@ -293,7 +259,6 @@ async def predict(file: UploadFile = File(...)):
 
     return result
 
-#  정적 파일 서빙 (웹앱)
 if os.path.isdir(STATIC_DIR):
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
@@ -312,7 +277,6 @@ else:
             "health":  "/health",
         }
 
-#  실행
 if __name__ == "__main__":
     import uvicorn
     print(f"\n서버 시작: http://0.0.0.0:{PORT}")
