@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 import train as T
 
-MAX_COPY_PER_TYPE = 20 # 발표 시연용으로 복사할 오디오 최대 개수 (FP/FN 각각)
+MAX_COPY_PER_TYPE = 20
 THRESHOLD = 0.5
 
 
@@ -17,7 +17,6 @@ def main():
     print(f"[device] {device}")
     print(f"[threshold] {THRESHOLD}")
 
-    # 1. 데이터 분할 불러오기
     split_path = os.path.join(T.RESULTS_DIR, "dataset_split.json")
     if not os.path.exists(split_path):
         for cand in ["results/dataset_split.json", "./dataset_split.json"]:
@@ -30,9 +29,8 @@ def main():
     test_speakers = split["test_speakers"]
     print(f"[test] 화자 {len(test_speakers)}명")
 
-    # 2. 테스트 항목 구성
     print("[build] train 코드의 collect_speaker_data() 재사용")
-    speaker_data = T.collect_speaker_data()   # {speaker: [(real_path, fake_path), ...]}
+    speaker_data = T.collect_speaker_data()
 
     test_set = set(test_speakers)
     test_items = []
@@ -40,8 +38,8 @@ def main():
         if speaker not in test_set:
             continue
         for real_path, fake_path in pairs:
-            test_items.append((real_path, 0))   # real = 0
-            test_items.append((fake_path, 1))   # fake = 1
+            test_items.append((real_path, 0))
+            test_items.append((fake_path, 1))
 
     print(f"[test] 화자 {len(test_set & set(speaker_data.keys()))}명 / "
           f"샘플 {len(test_items)}개")
@@ -51,7 +49,6 @@ def main():
             "{speaker: [(real,fake),...]} 가 맞는지, test_speakers 이름이 "
             "폴더명과 일치하는지 확인하세요.")
 
-    # 3. 모델 로드 (best_model.pth)
     ckpt_path = os.path.join(T.CHECKPOINT_DIR, "best_model.pth")
     print(f"[model] {ckpt_path} 로드 중...")
     model = T.DeepfakeDetector().to(device)
@@ -60,12 +57,11 @@ def main():
     model.load_state_dict(state)
     model.eval()
 
-    # 4. 테스트셋 추론 (augment=False)
     test_ds = T.DeepfakeDataset(test_items, augment=False)
     test_loader = DataLoader(test_ds, batch_size=getattr(T, "BATCH_SIZE", 8),
                              shuffle=False, num_workers=0)
 
-    rows = []   # (path, true_label, prob, pred_label, result)
+    rows = []
     idx = 0
     with torch.no_grad():
         for waveforms, labels in tqdm(test_loader, desc="추론"):
@@ -82,7 +78,6 @@ def main():
                 rows.append((path, true, float(p), pred, result))
                 idx += 1
 
-    # 5. 결과 저장
     out_dir = T.RESULTS_DIR
     os.makedirs(out_dir, exist_ok=True)
 
@@ -103,7 +98,6 @@ def main():
     write_csv(fp_csv, fps)
     write_csv(fn_csv, fns)
 
-    # 6. 통계 출력
     n = len(rows)
     tn = sum(1 for r in rows if r[4] == "TN")
     tp = sum(1 for r in rows if r[4] == "TP")
@@ -119,7 +113,6 @@ def main():
     print(f"  FP 목록:   {fp_csv} ({fp}개)")
     print(f"  FN 목록:   {fn_csv} ({fn}개)")
 
-    # 7. 오탐 오디오 복사 (발표 시연용)
     sample_root = os.path.join(out_dir, "error_samples")
     fp_sorted = sorted(fps, key=lambda r: -r[2])[:MAX_COPY_PER_TYPE]
     fn_sorted = sorted(fns, key=lambda r: r[2])[:MAX_COPY_PER_TYPE]
@@ -134,7 +127,7 @@ def main():
                 shutil.copy2(path, dst)
     print(f"  오탐 오디오 복사: {sample_root}/FP, {sample_root}/FN "
           f"(각 최대 {MAX_COPY_PER_TYPE}개)")
-    print("\n완료!")
+    print("\n완료")
 
 
 if __name__ == "__main__":
